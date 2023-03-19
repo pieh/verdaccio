@@ -2,12 +2,12 @@ import buildDebug from 'debug';
 import fs from 'fs';
 import { dirname, join, resolve } from 'path';
 
-import { pluginUtils } from '@verdaccio/core';
+import { constants, pluginUtils } from '@verdaccio/core';
 import { unlockFile } from '@verdaccio/file-locking';
 import { Callback, Logger } from '@verdaccio/types';
 
 import {
-  HtpasswdHashAlgorithm,
+  DEFAULT_BCRYPT_ROUNDS,
   HtpasswdHashConfig,
   addUserToHTPasswd,
   changePasswordToHTPasswd,
@@ -16,6 +16,8 @@ import {
   sanityCheck,
   verifyPassword,
 } from './utils';
+
+type HtpasswdHashAlgorithm = constants.HtpasswdHashAlgorithm;
 
 const debug = buildDebug('verdaccio:plugin:htpasswd');
 
@@ -27,7 +29,6 @@ export type HTPasswdConfig = {
   slow_verify_ms?: number;
 };
 
-export const DEFAULT_BCRYPT_ROUNDS = 10;
 export const DEFAULT_SLOW_VERIFY_MS = 200;
 
 /**
@@ -63,15 +64,27 @@ export default class HTPasswd
     let algorithm: HtpasswdHashAlgorithm;
     let rounds: number | undefined;
 
-    if (config.algorithm === undefined) {
-      algorithm = HtpasswdHashAlgorithm.bcrypt;
-    } else if (HtpasswdHashAlgorithm[config.algorithm] !== undefined) {
-      algorithm = HtpasswdHashAlgorithm[config.algorithm];
+    if (typeof config.algorithm === 'undefined') {
+      // to avoid breaking changes we uses crypt, future version
+      // of this plugin uses bcrypt by default
+      // https://github.com/verdaccio/verdaccio/pull/2072#issuecomment-770235502
+      algorithm = constants.HtpasswdHashAlgorithm.crypt;
+    } else if (constants.HtpasswdHashAlgorithm[config.algorithm] !== undefined) {
+      algorithm = constants.HtpasswdHashAlgorithm[config.algorithm];
     } else {
-      throw new Error(`Invalid algorithm "${config.algorithm}"`);
+      this.logger.error(`Invalid auth algorithm %s`, config.algorithm);
+      this.logger.info(`auth hash algorithm has switched to bcrypt`);
+      algorithm = constants.HtpasswdHashAlgorithm.bcrypt;
     }
     debug(`password hash algorithm: ${algorithm}`);
-    if (algorithm === HtpasswdHashAlgorithm.bcrypt) {
+    if (config.algorithm === constants.HtpasswdHashAlgorithm.crypt) {
+      this.logger.info(
+        // eslint-disable-next-line max-len
+        '"crypt" algorithm is deprecated consider switch to "bcrypt". Read more: https://github.com/verdaccio/monorepo/pull/580'
+      );
+    }
+
+    if (algorithm === constants.HtpasswdHashAlgorithm.bcrypt) {
       rounds = config.rounds || DEFAULT_BCRYPT_ROUNDS;
     } else if (config.rounds !== undefined) {
       this.logger.warn({ algo: algorithm }, 'Option "rounds" is not valid for "@{algo}" algorithm');
@@ -202,7 +215,7 @@ export default class HTPasswd
       }
 
       try {
-        this._writeFile(addUserToHTPasswd(body, user, password, this.hashConfig), cb);
+        this._writeFile(await addUserToHTPasswd(body, user, password, this.hashConfig), cb);
       } catch (err: any) {
         return cb(err);
       }

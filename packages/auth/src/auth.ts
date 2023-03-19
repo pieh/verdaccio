@@ -10,6 +10,7 @@ import {
   TOKEN_BASIC,
   TOKEN_BEARER,
   VerdaccioError,
+  constants,
   errorUtils,
   pluginUtils,
 } from '@verdaccio/core';
@@ -59,6 +60,11 @@ export type $RequestExtend = Request & { remote_user?: any; log: Logger };
 export type $ResponseExtend = Response & { cookies?: any };
 export type $NextFunctionVer = NextFunction & any;
 
+const defaultAuthPluginSettings = {
+  file: './htpasswd',
+  algorithm: constants.HtpasswdHashAlgorithm.bcrypt,
+};
+
 class Auth implements IAuthMiddleware, TokenEncryption, pluginUtils.IBasicAuth {
   public config: Config;
   public secret: string;
@@ -93,7 +99,7 @@ class Auth implements IAuthMiddleware, TokenEncryption, pluginUtils.IBasicAuth {
     let authPlugin;
     try {
       authPlugin = new HTPasswd(
-        { file: './htpasswd' },
+        defaultAuthPluginSettings,
         pluginOptions as any as pluginUtils.PluginOptions
       );
     } catch (error: any) {
@@ -106,8 +112,18 @@ class Auth implements IAuthMiddleware, TokenEncryption, pluginUtils.IBasicAuth {
   }
 
   private async loadPlugin() {
+    const authConf = this.config.auth ?? {
+      htpasswd: defaultAuthPluginSettings,
+    };
+    // special logic to allow verdaccio-htpasswd work backward compatible
+    // default default bcrypt but the plugin still has crypt
+    // if htpasswd is defined but algorithm is not set forces bcrypt for this version of verdaccio
+    if (authConf.htpasswd && typeof authConf?.htpasswd?.algorithm !== 'string') {
+      authConf.htpasswd.algorithm = constants.HtpasswdHashAlgorithm.bcrypt;
+    }
+
     return asyncLoadPlugin<pluginUtils.Auth<unknown>>(
-      this.config.auth,
+      authConf,
       {
         config: this.config,
         logger,
